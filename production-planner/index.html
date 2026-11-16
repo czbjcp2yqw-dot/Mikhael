@@ -8,6 +8,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <title>Планёр — управление съёмками</title>
+  <link rel="stylesheet" href="./cloud.css">
   <style>
     :root{color-scheme:dark;--bg:#0c111b;--panel:#141b28;--panel2:#192232;--line:#293445;--text:#edf3ff;--muted:#93a2b7;--accent:#b7f36c;--accentText:#1c2710;--blue:#82bbff;--red:#f9a2a7;--amber:#f3c478;--radius:17px;--shadow:0 20px 60px #0003}
     body.light{color-scheme:light;--bg:#f6f7fa;--panel:#fff;--panel2:#f0f3f8;--line:#dce2eb;--text:#202938;--muted:#69778a;--accent:#355dd3;--accentText:#fff;--blue:#345fae;--red:#af323d;--amber:#9b670e;--shadow:0 16px 50px #29385213}
@@ -20,6 +21,8 @@
 </head>
 <body>
   <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0"></script>
+  <script src="./cloud.js"></script>
   <script>
   (function(){
     "use strict";
@@ -50,7 +53,15 @@
     ],equipment:[{id:1,name:"Sony FX3",holder:1},{id:2,name:"Штатив",holder:0},{id:3,name:"Sony A7 IV",holder:4}],updatedAt:Date.now()}}
     var state=load();
     try{if(localStorage.getItem(THEME_KEY)==="light")document.body.classList.add("light")}catch(e){}
-    function save(){state.updatedAt=Date.now();try{localStorage.setItem(STORAGE,JSON.stringify(state))}catch(e){notify("Не удалось сохранить изменения в браузере")}}
+    async function save(){
+      state.updatedAt=Date.now();
+      if(window.PlanerCloud){
+        try{await window.PlanerCloud.save(JSON.parse(JSON.stringify(state)));return true}
+        catch(e){notify("Не сохранено: "+(e.message||e));return false}
+      }
+      try{localStorage.setItem(STORAGE,JSON.stringify(state));return true}
+      catch(e){notify("Не удалось сохранить изменения в браузере");return false}
+    }
     function employee(eid){return state.employees.find(function(e){return String(e.id)===String(eid)})}
     function empName(eid){return (employee(eid)||{}).name||"Не назначен"}
     function tasksFor(date,eid){return state.tasks.filter(function(t){return (!date||t.date===date)&&(!eid||String(t.employeeId)===String(eid))&&t.status!=="cancelled"}).sort(function(a,b){return a.date.localeCompare(b.date)||a.time.localeCompare(b.time)})}
@@ -63,16 +74,24 @@
     function notify(s){var el=document.getElementById("toast");if(el)el.remove();el=document.createElement("div");el.id="toast";el.className="toast";el.textContent=s;document.body.appendChild(el);clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.remove()},3800)}
     function button(label,act,extra){return '<button class="btn '+(extra||"")+'" data-action="'+act+'">'+label+"</button>"}
     function render(){var root=document.getElementById("app");var title={dashboard:"Обзор продакшена",calendar:"Ресурсный календарь",tasks:"Все съёмки",objects:"Объекты и архив",team:"Команда и оборудование",reports:"Аналитика"}[view];
+      var shownNav=role==="operator"?nav.filter(function(v){return ["dashboard","calendar","tasks"].includes(v[0])}):nav;
       var aside='<aside class="aside"><div class="brand"><span class="brand-icon">◉</span>Планёр<span style="font-size:9px;color:var(--muted);align-self:flex-start">MVP</span></div><div class="eyebrow">Управление</div>'+
-       nav.map(function(v){return '<button class="nav-link '+(view===v[0]?"active":"")+'" data-action="view" data-view="'+v[0]+'"><span class="nav-ico">'+v[1]+"</span>"+v[2]+"</button>"}).join("")+
-       '<div class="aside-foot"><div class="chip">● Демо · данные в этом браузере</div><p>Для совместной работы потребуется сервер и авторизация.</p></div></aside>';
+       shownNav.map(function(v){return '<button class="nav-link '+(view===v[0]?"active":"")+'" data-action="view" data-view="'+v[0]+'"><span class="nav-ico">'+v[1]+"</span>"+v[2]+"</button>"}).join("")+
+       '<div class="aside-foot"><div class="chip">● Общая база Supabase</div><p>Изменения сохраняются в облаке, права проверяются сервером.</p></div></aside>';
       var head='<header class="header"><div><p class="eyebrow" style="margin:0 0 6px">PRODUCTION CONTROL</p><h1>'+title+'</h1><p class="sub">'+(role==="operator"?"Кабинет оператора · "+esc(empName(operatorId)):"Планирование и контроль съёмочного процесса")+'</p></div>'+
         '<div class="toolbar"><button class="btn hide-mobile" data-action="theme" title="Сменить тему">◐</button><button class="btn primary" data-action="new">＋ <span class="hide-mobile">Новая съёмка</span></button></div></header>';
       var selector='<div class="view-tools"><div class="list-tools"><label class="tiny muted" for="role">Режим:</label><select class="select" id="role" style="width:auto"><option value="coordinator" '+(role==="coordinator"?"selected":"")+'>Координатор</option><option value="operator" '+(role==="operator"?"selected":"")+'>Оператор (демо)</option></select>'+
        (role==="operator"?'<select class="select" id="operator" style="width:auto">'+state.employees.map(function(e){return '<option value="'+e.id+'" '+(operatorId===e.id?"selected":"")+'>'+esc(e.name)+"</option>"}).join("")+"</select>":"")+'</div><div class="flex"><span class="chip">Данные сохраняются на устройстве</span></div></div>';
+      if(window.PlanerCloud){
+        var p=window.PlanerCloud.profile||{};
+        var roleLabel=p.role==="admin"?"Администратор":p.role==="coordinator"?"Координатор":"Оператор";
+        selector='<div class="view-tools"><div class="list-tools"><span class="chip">'+esc(roleLabel)+' · '+esc(p.display_name||"")+
+          '</span><span class="chip" id="cloud-status">Общая база · онлайн</span></div><div class="flex"><button class="btn small" data-action="cloud-logout">Выйти</button></div></div>';
+        if(role==="operator") head=head.replace('<button class="btn primary" data-action="new">＋ <span class="hide-mobile">Новая съёмка</span></button>','');
+      }
       var body={dashboard:dashboard,calendar:calendar,tasks:tasksPage,objects:objectsPage,team:teamPage,reports:reportsPage}[view]();
-      root.innerHTML='<div class="layout">'+aside+'<main class="main">'+head+selector+body+'<div class="footer-note">Планёр MVP · Демонстрационный режим · Без облачной синхронизации</div></main></div>'+
-       '<nav class="mobile-nav">'+nav.slice(0,5).map(function(v){return '<button class="'+(view===v[0]?"active":"")+'" data-action="view" data-view="'+v[0]+'"><span class="nav-ico">'+v[1]+"</span>"+v[2]+"</button>"}).join("")+"</nav>"+(modal?renderModal():"");
+      root.innerHTML='<div class="layout">'+aside+'<main class="main">'+head+selector+body+'<div class="footer-note">Планёр MVP · Общая база с серверной проверкой прав</div></main></div>'+
+       '<nav class="mobile-nav">'+shownNav.slice(0,5).map(function(v){return '<button class="'+(view===v[0]?"active":"")+'" data-action="view" data-view="'+v[0]+'"><span class="nav-ico">'+v[1]+"</span>"+v[2]+"</button>"}).join("")+"</nav>"+(modal?renderModal():"");
     }
     function dashboard(){var current=tasksFor(today,role==="operator"?operatorId:null);var all=role==="operator"?state.tasks.filter(function(t){return t.employeeId===operatorId}):state.tasks;
       var inwork=current.filter(function(t){return ["in_progress","confirmed","assigned"].includes(t.status)}).length;
@@ -82,12 +101,12 @@
       var list=current.length?current.map(taskRow).join(""):'<div class="empty">На сегодня задач нет. Создайте новую съёмку.</div>';
       var people=state.employees.map(function(e){var jobs=tasksFor(today,e.id);var hours=jobs.reduce(function(s,t){return s+n(t.duration)},0)/60;return '<div class="person"><div class="split"><div class="flex"><span class="avatar">'+esc(initials(e.name))+'</span><div><div class="strong">'+esc(e.name)+'</div><div class="tiny muted">'+esc(e.job)+'</div></div></div><strong>'+hours.toFixed(1).replace(".",",")+' / '+n(e.hours)+' ч</strong></div><div class="progress"><span style="width:'+Math.min(100,Math.round(hours/Math.max(1,e.hours)*100))+'%"></span></div></div>'}).join("");
       return hero+stats+'<div class="grid2"><section class="section"><div class="section-head"><h2 class="section-title">Съёмки на сегодня</h2><button class="btn small" data-action="view" data-view="tasks">Все задачи</button></div>'+list+'</section><section class="section"><div class="section-head"><h2 class="section-title">Загрузка команды</h2><span class="tiny muted">Сегодня</span></div><div class="section-body">'+people+'</div></section></div>'+
-      '<div class="section"><div class="section-head"><h2 class="section-title">Быстрые действия</h2></div><div class="section-body flex">'+button("＋ Создать съёмку","new","primary")+button("▦ Открыть календарь","calendar")+button("▤ Сформировать план для MAX","plan")+button("⇩ Резервная копия","export")+'</div></div>';
+      '<div class="section"><div class="section-head"><h2 class="section-title">Быстрые действия</h2></div><div class="section-body flex">'+(role==="coordinator"?button("＋ Создать съёмку","new","primary"):"")+button("▦ Открыть календарь","calendar")+(role==="coordinator"?button("▤ Сформировать план для MAX","plan")+button("⇩ Резервная копия","export"):"")+'</div></div>';
     }
     function stat(title,val,sub){return '<div class="stat"><span>'+esc(title)+'</span><strong>'+val+'</strong><small>'+esc(sub)+'</small></div>'}
     function taskRow(t){var who=role==="coordinator"?'<span> · '+esc(empName(t.employeeId))+'</span>':"";return '<div class="task"><div class="flex" style="flex-wrap:nowrap;min-width:0"><div class="task-time">'+esc(t.time)+'</div><div style="min-width:0"><div class="task-title">'+esc(t.title)+'</div><div class="task-sub">'+esc(t.project)+" · "+esc(t.type)+who+'</div><div class="tiny muted">'+esc(t.address)+'</div></div></div><div class="task-actions">'+pill(t)+'<button class="btn small" data-action="details" data-id="'+t.id+'">Открыть</button></div></div>'}
     function calendar(){var mon=monday(selectedDay),days=Array.from({length:7},function(_,i){return addDays(mon,i)});
-      var toolbar='<div class="view-tools"><div class="flex"><button class="btn small" data-action="week-prev">‹</button><button class="btn small" data-action="week-next">›</button><button class="btn small" data-action="week-today">Сегодня</button><strong>'+esc(shortDate(days[0]))+' – '+esc(niceDate(days[6]))+'</strong></div><div class="flex">'+button("＋ Съёмка","new","primary")+button("Собрать план для MAX","plan")+'</div></div>';
+      var toolbar='<div class="view-tools"><div class="flex"><button class="btn small" data-action="week-prev">‹</button><button class="btn small" data-action="week-next">›</button><button class="btn small" data-action="week-today">Сегодня</button><strong>'+esc(shortDate(days[0]))+' – '+esc(niceDate(days[6]))+'</strong></div><div class="flex">'+(role==="coordinator"?button("＋ Съёмка","new","primary")+button("Собрать план для MAX","plan"):"")+'</div></div>';
       var header='<div class="week"><div class="day-h">Команда</div>'+days.map(function(d){return '<button class="day-h '+(d===today?"today":"")+'" data-action="select-day" data-date="'+d+'">'+esc(dow(d))+'<br><strong>'+esc(shortDate(d))+'</strong></button>'}).join("");
       var persons=role==="operator"?[employee(operatorId)].filter(Boolean):state.employees;
       var rows=persons.map(function(e){return '<div class="employee-h">'+esc(e.name)+'<div class="tiny muted">'+esc(e.job)+'</div></div>'+days.map(function(d){var items=tasksFor(d,e.id);return '<div class="cell">'+items.map(function(t){return '<button class="event" data-action="details" data-id="'+t.id+'"><b>'+esc(t.time)+'</b> '+esc(t.title)+'<br><span class="muted">'+esc(t.project)+'</span></button>'}).join("")+'</div>'}).join("")}).join("");
@@ -102,7 +121,7 @@
     }
     function teamPage(){var emp=state.employees.map(function(e){var current=tasksFor(today,e.id);return '<div class="person"><div class="split"><div class="flex"><span class="avatar">'+esc(initials(e.name))+'</span><div><strong>'+esc(e.name)+'</strong><div class="tiny muted">'+esc(e.job)+' · '+e.hours+' ч/день</div></div></div><span class="chip">'+current.length+' съёмок сегодня</span></div></div>'}).join("");
       var eq=(state.equipment||[]).map(function(q){return '<div class="person split"><strong>'+esc(q.name)+'</strong><div class="flex"><span class="tiny muted">'+(q.holder?"У "+esc(empName(q.holder)):"На складе")+'</span><button class="btn small" data-action="equipment" data-id="'+q.id+'">'+(q.holder?"Вернуть":"Выдать")+'</button></div></div>'}).join("");
-      return '<div class="grid2"><section class="section"><div class="section-head"><h2 class="section-title">Сотрудники</h2><button class="btn small" data-action="add-person">＋ Добавить</button></div><div class="section-body">'+emp+'</div></section><section class="section"><div class="section-head"><h2 class="section-title">Дежурное оборудование</h2><span class="chip">Учёт MVP</span></div><div class="section-body">'+eq+'</div></section></div><div class="notice info">Графики 2/2, отпуска, доступы и история выдачи оборудования будут добавлены при подключении серверной базы данных. Сейчас изменения сохраняются только в этом браузере.</div>';
+      return '<div class="grid2"><section class="section"><div class="section-head"><h2 class="section-title">Сотрудники</h2><button class="btn small" data-action="add-person">＋ Добавить</button></div><div class="section-body">'+emp+'</div></section><section class="section"><div class="section-head"><h2 class="section-title">Дежурное оборудование</h2><span class="chip">Учёт MVP</span></div><div class="section-body">'+eq+'</div></section></div><div class="notice info">Графики 2/2, отпуска, доступы и история выдачи оборудования будут добавлены при подключении серверной базы данных. Для совместной работы используются облачные учётные записи. Расширенные графики и журнал оборудования — следующий этап.</div>'+(window.PlanerCloud?window.PlanerCloud.adminUI(state.employees):'');
     }
     function reportsPage(){var jobs=state.tasks.filter(function(t){return t.status!=="cancelled"}),late=jobs.filter(isLate),total=jobs.reduce(function(s,t){return s+n(t.duration)},0)/60;
       var rows=state.employees.map(function(e){var items=jobs.filter(function(t){return t.employeeId===e.id});var hours=items.reduce(function(s,t){return s+n(t.duration)},0)/60;return '<div class="metric-row"><div class="split"><strong>'+esc(e.name)+'</strong><span>'+hours.toFixed(1).replace(".",",")+' ч · '+items.length+' задач</span></div><div class="progress"><span style="width:'+Math.min(100,Math.round(hours/Math.max(1,total)*100))+'%"></span></div></div>'}).join("");
@@ -110,7 +129,7 @@
     }
     function renderModal(){var type=modal.type,t=state.tasks.find(function(x){return x.id===modal.id}),head="",content="",foot="";
       if(type==="new"||type==="edit"){
-        var x=t||{title:"",project:"",address:"",date:selectedDay,time:"10:00",duration:120,employeeId:1,type:"Видео",brief:"",details:"",contact:"",status:"assigned"};
+        var x=t||{title:"",project:"",address:"",date:selectedDay,time:"10:00",duration:120,employeeId:state.employees.length?state.employees[0].id:0,type:"Видео",brief:"",details:"",contact:"",status:"assigned"};
         head=type==="new"?"Новая съёмка":"Изменить съёмку";
         content='<form id="task-form"><div class="form-grid">'+
           field("Название *","title",x.title,"text",true)+field("Объект / проект *","project",x.project,"text",true)+field("Адрес *","address",x.address,"text",true)+
@@ -155,8 +174,9 @@
     function exportData(){var data=new Blob([JSON.stringify(state,null,2)],{type:"application/json;charset=utf-8"});var a=document.createElement("a");a.href=URL.createObjectURL(data);a.download="planer-backup-"+today+".json";a.click();setTimeout(function(){URL.revokeObjectURL(a.href)},1000);notify("Резервная копия создана")}
     function showModal(type,extra){modal=Object.assign({type:type},extra||{});render()}
     function setView(v){view=v;modal=null;render();window.scrollTo(0,0)}
-    document.addEventListener("click",function(e){
+    document.addEventListener("click",async function(e){
       var a=e.target.closest("[data-action]");if(!a){if(e.target.id==="overlay"){modal=null;render()}return}var action=a.dataset.action,taskid=a.dataset.id,t=state.tasks.find(function(x){return x.id===taskid});
+      if(action==="cloud-logout"&&window.PlanerCloud){await window.PlanerCloud.logout();return}
       if(action==="view"){setView(a.dataset.view);return}
       if(action==="calendar"){setView("calendar");return}
       if(action==="theme"){document.body.classList.toggle("light");localStorage.setItem(THEME_KEY,document.body.classList.contains("light")?"light":"dark");return}
@@ -165,7 +185,15 @@
       if(action==="details"&&t){showModal("details",{id:taskid});return}
       if(action==="edit"&&t){showModal("edit",{id:taskid});return}
       if(action==="material"&&t){showModal("material",{id:taskid});return}
-      if(action==="status"&&t){t.status=a.dataset.status;save();showModal("details",{id:taskid});notify("Статус обновлён");return}
+      if(action==="status"&&t){
+        if(window.PlanerCloud&&role==="operator"){
+          try{await window.PlanerCloud.progress(t.id,a.dataset.status);showModal("details",{id:taskid});notify("Статус обновлён")}
+          catch(err){notify("Не удалось: "+err.message);await window.PlanerCloud.refresh(true)}
+          return;
+        }
+        t.status=a.dataset.status;if(!(await save()))return;
+        showModal("details",{id:taskid});notify("Статус обновлён");return
+      }
       if(action==="week-prev"){selectedDay=addDays(selectedDay,-7);render();return}
       if(action==="week-next"){selectedDay=addDays(selectedDay,7);render();return}
       if(action==="week-today"){selectedDay=today;render();return}
@@ -175,10 +203,10 @@
       if(action==="object"){showModal("object",{name:a.dataset.name});return}
       if(action==="add-person"){showModal("add-person");return}
       if(action==="equipment"){showModal("equipment",{id:Number(taskid)});return}
-      if(action==="give-equipment"){var q=state.equipment.find(function(x){return x.id===Number(taskid)});if(q){q.holder=Number(document.getElementById("equipment-person").value);save();modal=null;render();notify("Выдача отмечена")}return}
-      if(action==="return-equipment"){var qq=state.equipment.find(function(x){return x.id===Number(taskid)});if(qq){qq.holder=0;save();modal=null;render();notify("Возврат отмечен")}return}
+      if(action==="give-equipment"){var q=state.equipment.find(function(x){return x.id===Number(taskid)});if(q){q.holder=Number(document.getElementById("equipment-person").value);if(!(await save()))return;modal=null;render();notify("Выдача отмечена")}return}
+      if(action==="return-equipment"){var qq=state.equipment.find(function(x){return x.id===Number(taskid)});if(qq){qq.holder=0;if(!(await save()))return;modal=null;render();notify("Возврат отмечен")}return}
       if(action==="export"){exportData();return}
-      if(action==="import"){var f=document.createElement("input");f.type="file";f.accept="application/json,.json";f.onchange=function(){if(!f.files||!f.files[0])return;f.files[0].text().then(function(str){var next=JSON.parse(str);if(!Array.isArray(next.tasks)||!Array.isArray(next.employees))throw Error("Неверная структура");if(!confirm("Заменить текущие данные резервной копией?"))return;state=next;save();render();notify("Данные восстановлены")}).catch(function(){notify("Не удалось прочитать файл")})};f.click();return}
+      if(action==="import"){var f=document.createElement("input");f.type="file";f.accept="application/json,.json";f.onchange=function(){if(!f.files||!f.files[0])return;f.files[0].text().then(function(str){var next=JSON.parse(str);if(!Array.isArray(next.tasks)||!Array.isArray(next.employees))throw Error("Неверная структура");if(!confirm("Заменить текущие данные резервной копией?"))return;state=next;save().then(function(ok){if(ok){render();notify("Данные восстановлены")}})}).catch(function(){notify("Не удалось прочитать файл")})};f.click();return}
     });
     document.addEventListener("change",function(e){
       if(e.target.id==="role"){role=e.target.value;view="dashboard";render()}
@@ -186,7 +214,7 @@
       if(e.target.id==="status-filter"){statusFilter=e.target.value;render()}
     });
     document.addEventListener("input",function(e){if(e.target.id==="search"){search=e.target.value;var start=e.target.selectionStart;render();var el=document.getElementById("search");if(el){el.focus();el.setSelectionRange(start,start)}}});
-    document.addEventListener("submit",function(e){e.preventDefault();var form=e.target,fd=new FormData(form);
+    document.addEventListener("submit",async function(e){e.preventDefault();var form=e.target,fd=new FormData(form);
       if(form.id==="task-form"){
         var t=modal&&modal.type==="edit"?state.tasks.find(function(x){return x.id===modal.id}):null;
         var incoming={title:String(fd.get("title")||"").trim(),project:String(fd.get("project")||"").trim(),address:String(fd.get("address")||"").trim(),date:String(fd.get("date")||""),time:String(fd.get("time")||""),duration:n(fd.get("duration")),employeeId:n(fd.get("employeeId")),type:String(fd.get("type")||"Видео"),brief:String(fd.get("brief")||"").trim(),details:String(fd.get("details")||"").trim(),contact:String(fd.get("contact")||"").trim(),status:String(fd.get("status")||"assigned")};
@@ -194,14 +222,54 @@
         var clash=overlap(incoming,t?t.id:null);
         if(clash){document.getElementById("form-error").innerHTML='<div class="notice" style="margin-top:15px">Пересечение расписания с задачей «'+esc(clash.title)+'» ('+esc(clash.time)+'). Выберите другое время или исполнителя.</div>';return}
         if(t)Object.assign(t,incoming);else state.tasks.push(Object.assign({id:id(),link:"",note:""},incoming));
-        save();modal=null;view="tasks";render();notify("Съёмка сохранена");return
+        if(!(await save()))return;modal=null;view="tasks";render();notify("Съёмка сохранена");return
       }
-      if(form.id==="material-form"){var t2=state.tasks.find(function(x){return x.id===modal.id});var link=String(fd.get("link")||"").trim();if(!url(link)){notify("Укажите действительную ссылку https://");return}if(t2){t2.link=link;t2.note=String(fd.get("note")||"");t2.status="uploaded";save();modal=null;render();notify("Ссылка на материалы сохранена")}return}
-      if(form.id==="person-form"){var name=String(fd.get("name")||"").trim(),job=String(fd.get("job")||"").trim(),hours=n(fd.get("hours"));if(!name||!job||hours<1||hours>24){notify("Проверьте поля сотрудника");return}state.employees.push({id:Date.now(),name:name,job:job,hours:hours});save();modal=null;render();notify("Сотрудник добавлен");return}
+      if(form.id==="material-form"){
+        var t2=state.tasks.find(function(x){return x.id===modal.id});
+        var link=String(fd.get("link")||"").trim();
+        if(!url(link)||!link.startsWith("https://")){notify("Укажите действительную HTTPS-ссылку");return}
+        if(t2){
+          var note=String(fd.get("note")||"");
+          if(window.PlanerCloud&&role==="operator"){
+            try{await window.PlanerCloud.progress(t2.id,"uploaded",link,note);modal=null;render();notify("Материалы переданы")}
+            catch(err){notify("Не удалось: "+err.message);await window.PlanerCloud.refresh(true)}
+            return;
+          }
+          t2.link=link;t2.note=note;t2.status="uploaded";
+          if(!(await save()))return;
+          modal=null;render();notify("Ссылка на материалы сохранена");
+        }
+        return
+      }
+      if(form.id==="person-form"){var name=String(fd.get("name")||"").trim(),job=String(fd.get("job")||"").trim(),hours=n(fd.get("hours"));if(!name||!job||hours<1||hours>24){notify("Проверьте поля сотрудника");return}state.employees.push({id:Date.now(),name:name,job:job,hours:hours});if(!(await save()))return;modal=null;render();notify("Сотрудник добавлен");return}
     });
     document.addEventListener("keydown",function(e){if(e.key==="Escape"&&modal){modal=null;render()}});
     if("serviceWorker" in navigator){window.addEventListener("load",function(){navigator.serviceWorker.register("./sw.js").catch(function(){})})}
+    window.__PLANER_BRIDGE={
+      boot:function(snapshot,member,list,revision){
+        if(!snapshot||!Array.isArray(snapshot.tasks)||!Array.isArray(snapshot.employees)){notify("Некорректный ответ сервера");return}
+        state=snapshot;
+        role=member.role==="operator"?"operator":"coordinator";
+        operatorId=Number(member.employee_id)||0;
+        if(role==="operator"&&["team","objects","reports"].includes(view))view="dashboard";
+        render();
+      },
+      importLocal:async function(){
+        if(!window.PlanerCloud||window.PlanerCloud.profile?.role!=="admin")throw Error("Только администратор может переносить архив.");
+        var raw=localStorage.getItem(STORAGE);
+        if(!raw)throw Error("На этом устройстве нет сохранённых данных прежней версии.");
+        var old;
+        try{old=JSON.parse(raw)}catch(e){throw Error("Данные старой версии повреждены.")}
+        if(!old||!Array.isArray(old.tasks)||!Array.isArray(old.employees)||!Array.isArray(old.equipment))throw Error("Неверный формат архива.");
+        if(!confirm("Перенести "+old.tasks.length+" съёмок и "+old.employees.length+" сотрудников в общую базу? Текущие записи облака будут заменены."))return;
+        var previous=state;
+        state=old;
+        if(!(await save())){state=previous;throw Error("Перенос не выполнен.")}
+        render();notify("Архив перенесён в общую базу.");
+      }
+    };
     render();
+    if(window.PlanerCloud)window.PlanerCloud.start(window.__PLANER_BRIDGE);
   })();
   </script>
 </body>
